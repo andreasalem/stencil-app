@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stencil Maker</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
+</head>
+<body>
+
+  <header>
+    <h1>Stencil Maker</h1>
+    <p>Drop an image, choose colors, export stencil layers</p>
+  </header>
+
+  <div id="dropzone">
+    <div class="dropzone-content">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <p>Drop image here</p>
+      <span>or click to browse</span>
+    </div>
+    <input type="file" id="file-input" accept="image/*">
+  </div>
+
+  <main id="app" class="hidden">
+    <aside id="controls">
+      <div class="control-group">
+        <label>Colors <span class="value" id="n-value">4</span></label>
+        <input type="range" id="n-slider" min="2" max="12" value="4" step="1">
+      </div>
+      <div class="control-group">
+        <label>Contrast <span class="value" id="contrast-value">0</span></label>
+        <input type="range" id="contrast-slider" min="-100" max="100" value="0" step="1">
+      </div>
+      <div class="control-group">
+        <label>Brightness <span class="value" id="brightness-value">0</span></label>
+        <input type="range" id="brightness-slider" min="-100" max="100" value="0" step="1">
+      </div>
+      <div class="control-group">
+        <label>Blur <span class="value" id="blur-value">0</span></label>
+        <input type="range" id="blur-slider" min="0" max="10" value="0" step="0.5">
+      </div>
+      <div class="control-group toggles">
+        <label class="toggle"><input type="checkbox" id="grayscale-toggle"> Grayscale</label>
+        <label class="toggle"><input type="checkbox" id="dither-toggle"> Dithering</label>
+      </div>
+      <hr>
+      <button id="export-all-btn" class="btn primary" disabled>Export All (ZIP)</button>
+      <button id="export-pdf-btn" class="btn secondary" disabled>Export PDF</button>
+      <button id="new-image-btn" class="btn outline">New Image</button>
+    </aside>
+
+    <section id="workspace">
+      <div id="preview-area">
+        <div id="preview-tabs">
+          <button class="tab active" data-tab="original">Original</button>
+          <button class="tab" data-tab="quantized">Stencil Preview</button>
+        </div>
+        <div id="canvas-container">
+          <canvas id="preview-canvas"></canvas>
+          <div id="processing" class="hidden">
+            <div class="spinner"></div>
+            <span>Processing...</span>
+          </div>
+        </div>
+      </div>
+      <div id="layers-area">
+        <h2>Layers <span id="layer-count"></span></h2>
+        <div id="layers-grid"></div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

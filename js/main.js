@@ -24,6 +24,7 @@ const params = {
   n: 4,
   contrast: 0,
   brightness: 0,
+  saturation: 0,
   blur: 0,
   grayscale: false,
   dither: false,
@@ -148,6 +149,7 @@ function initControls() {
     { id: 'n-slider', param: 'n', display: 'n-value', parse: parseInt },
     { id: 'contrast-slider', param: 'contrast', display: 'contrast-value', parse: parseInt },
     { id: 'brightness-slider', param: 'brightness', display: 'brightness-value', parse: parseInt },
+    { id: 'saturation-slider', param: 'saturation', display: 'saturation-value', parse: parseInt },
     { id: 'blur-slider', param: 'blur', display: 'blur-value', parse: parseFloat },
   ];
 

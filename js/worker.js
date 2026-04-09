@@ -238,14 +238,18 @@ function boxBlurV(src, dst, w, h, r) {
 }
 
 /* ============================
- *  K-means quantization in CIELAB
+ *  Hierarchical bisecting k-means in CIELAB
+ *
+ *  Key property: INCREMENTAL.
+ *  N=4 palette is always a subset/refinement of N=5.
+ *  Going from N to N+1 splits one cluster — everything else stays.
+ *  Deterministic (no random seeds) — same image + params = same result.
  * ============================ */
 
-function kmeansQuantizeLab(px, w, h, k, maxIter) {
-  maxIter = maxIter || 20;
+function kmeansQuantizeLab(px, w, h, k) {
   const numPx = w * h;
 
-  // --- Convert ALL pixels to Lab (needed for final assignment) ---
+  // --- Convert ALL pixels to Lab ---
   const allL = new Float32Array(numPx);
   const allA = new Float32Array(numPx);
   const allB = new Float32Array(numPx);
@@ -254,14 +258,13 @@ function kmeansQuantizeLab(px, w, h, k, maxIter) {
     allL[i] = lab[0]; allA[i] = lab[1]; allB[i] = lab[2];
   }
 
-  // --- Subsample for speed (up to 20 000 pixels) ---
-  const sampleSize = Math.min(numPx, 20000);
+  // --- Subsample for clustering (up to 25 000 pixels) ---
+  const sampleSize = Math.min(numPx, 25000);
   const step = Math.max(1, Math.floor(numPx / sampleSize));
   const sIdx = [];
   for (let i = 0; i < numPx; i += step) sIdx.push(i);
   const sLen = sIdx.length;
 
-  // Extract sample Lab values
   const sL = new Float32Array(sLen);
   const sA = new Float32Array(sLen);
   const sB = new Float32Array(sLen);
@@ -269,50 +272,56 @@ function kmeansQuantizeLab(px, w, h, k, maxIter) {
     sL[i] = allL[sIdx[i]]; sA[i] = allA[sIdx[i]]; sB[i] = allB[sIdx[i]];
   }
 
-  // --- K-means++ init in Lab space ---
-  const cL = new Float32Array(k);
-  const cA = new Float32Array(k);
-  const cB = new Float32Array(k);
+  // --- Start with 1 cluster (global mean) ---
+  // Each cluster: { cL, cA, cB, members: [indices into sample], sse }
+  const clusters = [];
+  const allMembers = [];
+  for (let i = 0; i < sLen; i++) allMembers.push(i);
+  clusters.push(buildCluster(sL, sA, sB, allMembers));
 
-  let first = Math.floor(Math.random() * sLen);
-  cL[0] = sL[first]; cA[0] = sA[first]; cB[0] = sB[first];
-
-  const dist = new Float32Array(sLen);
-  for (let c = 1; c < k; c++) {
-    let total = 0;
-    for (let i = 0; i < sLen; i++) {
-      let minD = Infinity;
-      for (let j = 0; j < c; j++) {
-        const dL = sL[i] - cL[j], dA = sA[i] - cA[j], dB = sB[i] - cB[j];
-        const d = dL * dL + dA * dA + dB * dB;
-        if (d < minD) minD = d;
+  // --- Repeatedly split highest-SSE cluster until we have k ---
+  while (clusters.length < k) {
+    // Find cluster with highest SSE (sum of squared errors)
+    let worstIdx = 0, worstSSE = -1;
+    for (let i = 0; i < clusters.length; i++) {
+      if (clusters[i].sse > worstSSE && clusters[i].members.length >= 2) {
+        worstSSE = clusters[i].sse;
+        worstIdx = i;
       }
-      dist[i] = minD;
-      total += minD;
     }
-    let target = Math.random() * total;
-    for (let i = 0; i < sLen; i++) {
-      target -= dist[i];
-      if (target <= 0) { cL[c] = sL[i]; cA[c] = sA[i]; cB[c] = sB[i]; break; }
-    }
+
+    // Bisect it: split along the axis of greatest variance
+    const c = clusters[worstIdx];
+    const { clusterA, clusterB } = bisect(sL, sA, sB, c);
+
+    // Replace the worst cluster with the two halves
+    clusters.splice(worstIdx, 1, clusterA, clusterB);
   }
 
-  // --- Iterate on samples ---
+  // --- Refine all clusters with a few rounds of full k-means ---
+  const cL = new Float32Array(k);
+  const cA_arr = new Float32Array(k);
+  const cB_arr = new Float32Array(k);
+  for (let j = 0; j < k; j++) {
+    cL[j] = clusters[j].cL;
+    cA_arr[j] = clusters[j].cA;
+    cB_arr[j] = clusters[j].cB;
+  }
+
+  // 10 rounds of Lloyd's refinement on the sample
   const sAssign = new Uint8Array(sLen);
-  for (let iter = 0; iter < maxIter; iter++) {
+  for (let iter = 0; iter < 10; iter++) {
     let changed = false;
     for (let i = 0; i < sLen; i++) {
       let minD = Infinity, best = 0;
       for (let j = 0; j < k; j++) {
-        const dL = sL[i] - cL[j], dA = sA[i] - cA[j], dB = sB[i] - cB[j];
+        const dL = sL[i] - cL[j], dA = sA[i] - cA_arr[j], dB = sB[i] - cB_arr[j];
         const d = dL * dL + dA * dA + dB * dB;
         if (d < minD) { minD = d; best = j; }
       }
       if (sAssign[i] !== best) { sAssign[i] = best; changed = true; }
     }
     if (!changed) break;
-
-    // Update centroids in Lab space
     const sumL = new Float64Array(k), sumA = new Float64Array(k), sumB = new Float64Array(k);
     const cnt = new Uint32Array(k);
     for (let i = 0; i < sLen; i++) {
@@ -320,30 +329,28 @@ function kmeansQuantizeLab(px, w, h, k, maxIter) {
       sumL[a] += sL[i]; sumA[a] += sA[i]; sumB[a] += sB[i]; cnt[a]++;
     }
     for (let j = 0; j < k; j++) {
-      if (cnt[j] > 0) { cL[j] = sumL[j] / cnt[j]; cA[j] = sumA[j] / cnt[j]; cB[j] = sumB[j] / cnt[j]; }
+      if (cnt[j] > 0) { cL[j] = sumL[j] / cnt[j]; cA_arr[j] = sumA[j] / cnt[j]; cB_arr[j] = sumB[j] / cnt[j]; }
     }
   }
 
-  // --- Assign ALL pixels in Lab space ---
+  // --- Assign ALL pixels ---
   const assignments = new Uint8Array(numPx);
   for (let i = 0; i < numPx; i++) {
     const pL = allL[i], pA = allA[i], pB = allB[i];
     let minD = Infinity, best = 0;
     for (let j = 0; j < k; j++) {
-      const dL = pL - cL[j], dA = pA - cA[j], dB = pB - cB[j];
+      const dL = pL - cL[j], dA = pA - cA_arr[j], dB = pB - cB_arr[j];
       const d = dL * dL + dA * dA + dB * dB;
       if (d < minD) { minD = d; best = j; }
     }
     assignments[i] = best;
   }
 
-  // --- Convert centroids back to RGB ---
+  // --- Convert centroids to RGB, sort by luminance ---
   const palRGB = [];
   for (let j = 0; j < k; j++) {
-    palRGB.push({ idx: j, rgb: lab2rgb(cL[j], cA[j], cB[j]), lum: cL[j] });
+    palRGB.push({ idx: j, rgb: lab2rgb(cL[j], cA_arr[j], cB_arr[j]), lum: cL[j] });
   }
-
-  // Sort palette by luminance (dark → light)
   palRGB.sort((a, b) => a.lum - b.lum);
   const remap = new Uint8Array(k);
   palRGB.forEach((p, i) => { remap[p.idx] = i; });
@@ -351,6 +358,59 @@ function kmeansQuantizeLab(px, w, h, k, maxIter) {
 
   const palette = palRGB.map(p => p.rgb);
   return { assignments, palette };
+}
+
+/** Build a cluster from a set of sample member indices */
+function buildCluster(sL, sA, sB, members) {
+  let sumL = 0, sumA = 0, sumB = 0;
+  for (const i of members) { sumL += sL[i]; sumA += sA[i]; sumB += sB[i]; }
+  const n = members.length;
+  const cL = sumL / n, cA = sumA / n, cB = sumB / n;
+
+  // SSE = total squared distance from centroid
+  let sse = 0;
+  for (const i of members) {
+    const dL = sL[i] - cL, dA = sA[i] - cA, dB = sB[i] - cB;
+    sse += dL * dL + dA * dA + dB * dB;
+  }
+  return { cL, cA, cB, members, sse };
+}
+
+/** Bisect a cluster along its principal axis of variance */
+function bisect(sL, sA, sB, cluster) {
+  const { cL, cA, cB, members } = cluster;
+
+  // Find axis of greatest variance
+  let varL = 0, varA = 0, varB = 0;
+  for (const i of members) {
+    const dL = sL[i] - cL, dA = sA[i] - cA, dB = sB[i] - cB;
+    varL += dL * dL; varA += dA * dA; varB += dB * dB;
+  }
+
+  // Split along that axis at the centroid
+  let membersA, membersB;
+  if (varL >= varA && varL >= varB) {
+    // Split on L
+    membersA = members.filter(i => sL[i] <= cL);
+    membersB = members.filter(i => sL[i] > cL);
+  } else if (varA >= varB) {
+    // Split on a*
+    membersA = members.filter(i => sA[i] <= cA);
+    membersB = members.filter(i => sA[i] > cA);
+  } else {
+    // Split on b*
+    membersA = members.filter(i => sB[i] <= cB);
+    membersB = members.filter(i => sB[i] > cB);
+  }
+
+  // Guard: if one side is empty (all identical), force a split
+  if (membersA.length === 0) { membersA = members.slice(0, 1); membersB = members.slice(1); }
+  if (membersB.length === 0) { membersB = members.slice(0, 1); membersA = members.slice(1); }
+
+  return {
+    clusterA: buildCluster(sL, sA, sB, membersA),
+    clusterB: buildCluster(sL, sA, sB, membersB)
+  };
 }
 
 /* ============================
